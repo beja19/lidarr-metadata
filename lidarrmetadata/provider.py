@@ -453,7 +453,8 @@ class HttpProvider(Provider,
             async with self._session_lock:
                 logger.debug("Initializing AIOHTTP Session")
                 
-                self._session = aiohttp.ClientSession(timeout = aiohttp.ClientTimeout(total=CONFIG.EXTERNAL_TIMEOUT / 1000))
+                self._session = aiohttp.ClientSession(timeout = aiohttp.ClientTimeout(total=CONFIG.EXTERNAL_TIMEOUT / 1000),
+                                                      headers = {'User-Agent': CONFIG.USER_AGENT})
                 
         return self._session
             

@@ -424,6 +424,10 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     EXTERNAL_LIMIT_TIME_DELTA = 1000
     # Request timeout in ms
     EXTERNAL_TIMEOUT = 250
+    # User-Agent sent with every provider request. Wikimedia refuses generic
+    # library ones such as aiohttp's default with 403, so without this no
+    # artist gets a Wikipedia overview.
+    USER_AGENT = 'LidarrAPI.Metadata/estate (self-hosted MusicBrainz mirror; https://github.com/beja19/lidarr-metadata)'
 
     # Redis db if using RedisRateLimiter
     EXTERNAL_LIMIT_REDIS_DB = 10
