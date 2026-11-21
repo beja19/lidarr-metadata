@@ -284,6 +284,9 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     REDIS_PORT = 6379
     POSTGRES_CACHE_HOST = 'db'
     POSTGRES_CACHE_PORT = 5432
+    POSTGRES_CACHE_USER = 'abc'
+    POSTGRES_CACHE_PASSWORD = 'abc'
+    POSTGRES_CACHE_DB = 'lm_cache_db'
 
     # TTL set in Cache-Control headers.  Use 0 to disable caching.
     # The GOOD value is used if we got info from all providers
@@ -293,6 +296,10 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     DAYS = 60 * 60 * 24
     
     USE_CACHE = True
+    # With USE_CACHE off, still keep TheAudioDB and Wikipedia answers in the
+    # Postgres cache, so a slow or refused outside call serves the last good
+    # answer instead of an empty one. Artist and album answers stay uncached.
+    PROVIDER_CACHE = False
     CACHE_TTL = {
         'cloudflare': DAYS * 30,
         'changes': 60,
@@ -424,10 +431,14 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     EXTERNAL_LIMIT_TIME_DELTA = 1000
     # Request timeout in ms
     EXTERNAL_TIMEOUT = 250
-    # User-Agent sent with every provider request. Wikimedia refuses generic
-    # library ones such as aiohttp's default with 403, so without this no
-    # artist gets a Wikipedia overview.
-    USER_AGENT = 'LidarrAPI.Metadata/estate (self-hosted MusicBrainz mirror; https://github.com/beja19/lidarr-metadata)'
+    # User-Agent sent with every provider request, followed by aiohttp/<version>
+    # as Wikimedia's User-Agent policy asks. Wikimedia refuses generic library
+    # ones such as aiohttp's default with 403, and TheAudioDB's Cloudflare
+    # refuses any that starts with LidarrAPI.Metadata.
+    USER_AGENT = 'estate-lidarr-metadata/1.0 (https://github.com/beja19/lidarr-metadata)'
+    # Wikimedia requests in flight at once. Wikimedia's rate limits page asks
+    # for 3 or fewer; a 429 pauses all of them for its Retry-After.
+    WIKIMEDIA_CONCURRENCY = 3
 
     # Redis db if using RedisRateLimiter
     EXTERNAL_LIMIT_REDIS_DB = 10

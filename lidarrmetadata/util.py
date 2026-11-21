@@ -3,6 +3,7 @@ Utility functionality that isn't specific to a given module
 """
 
 import abc
+import copy
 import time
 import logging
 
@@ -21,12 +22,31 @@ logger.info('Have util logger')
 
 
 CONFIG = config.get_config()
-if CONFIG.USE_CACHE:
-    logger.debug('using cache')
-    caches.set_config(CONFIG.CACHE_CONFIG)
-else:
-    logger.debug('null cache')
-    caches.set_config(CONFIG.NULL_CACHE_CONFIG)
+
+def _cache_config():
+    """
+    Builds the aiocache config for this run. PROVIDER_CACHE keeps the TheAudioDB
+    and Wikipedia caches in Postgres when USE_CACHE is off. Postgres connection
+    details come from the running config, so environment overrides reach them.
+    """
+    cache_config = copy.deepcopy(CONFIG.CACHE_CONFIG if CONFIG.USE_CACHE else CONFIG.NULL_CACHE_CONFIG)
+    if not CONFIG.USE_CACHE and CONFIG.PROVIDER_CACHE:
+        for name in ('tadb', 'wikipedia'):
+            cache_config[name] = copy.deepcopy(CONFIG.CACHE_CONFIG[name])
+
+    for settings in cache_config.values():
+        if settings['cache'] == 'lidarrmetadata.cache.PostgresCache':
+            settings.update(endpoint=CONFIG.POSTGRES_CACHE_HOST,
+                            port=CONFIG.POSTGRES_CACHE_PORT,
+                            user=CONFIG.POSTGRES_CACHE_USER,
+                            password=CONFIG.POSTGRES_CACHE_PASSWORD,
+                            db_name=CONFIG.POSTGRES_CACHE_DB)
+    return cache_config
+
+_CACHE_CONFIG = _cache_config()
+caches.set_config(_CACHE_CONFIG)
+logger.debug('caches: ' + ', '.join(f'{name} {settings["cache"].rsplit(".", 1)[-1]}'
+                                    for name, settings in _CACHE_CONFIG.items()))
 
 # Cache for application
 CACHE = caches.get('default')

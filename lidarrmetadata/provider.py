@@ -433,7 +433,19 @@ class Provider(six.with_metaclass(ProviderMeta, object)):
         
 class ProviderUnavailableException(Exception):
     """ Thown on error for providers we can cope without """
-    pass
+    def __init__(self, message='', status=None, retry_after=None):
+        super().__init__(message)
+        # HTTP status of the failed response, and its Retry-After in seconds
+        self.status = status
+        self.retry_after = retry_after
+
+def _retry_after_seconds(headers):
+    """
+    Seconds from a Retry-After header given in seconds, or None. The HTTP-date
+    form is treated as absent, so the caller's default applies.
+    """
+    value = (headers or {}).get('Retry-After', '')
+    return int(value) if value.isdigit() else None
 
 class HttpProvider(Provider,
                    AsyncDel):
@@ -468,7 +480,7 @@ class HttpProvider(Provider,
                 logger.debug("Initializing AIOHTTP Session")
                 
                 self._session = aiohttp.ClientSession(timeout = aiohttp.ClientTimeout(total=CONFIG.EXTERNAL_TIMEOUT / 1000),
-                                                      headers = {'User-Agent': CONFIG.USER_AGENT})
+                                                      headers = {'User-Agent': f'{CONFIG.USER_AGENT} aiohttp/{aiohttp.__version__}'})
                 
         return self._session
             
@@ -514,7 +526,9 @@ class HttpProvider(Provider,
         except (aiohttp.ClientError, aiohttp.http_exceptions.HttpProcessingError) as error:
             logger.error(f'aiohttp exception {getattr(error, "status", None)}',
                          extra = dict(error_message=getattr(error, "message", None), error=repr(error)))
-            raise ProviderUnavailableException(f'{self._name} aiohttp exception')
+            raise ProviderUnavailableException(f'{self._name} aiohttp exception',
+                                               status=getattr(error, 'status', None),
+                                               retry_after=_retry_after_seconds(getattr(error, 'headers', None)))
         except asyncio.CancelledError:
             logger.debug(f'Task cancelled {url}')
             raise
@@ -593,7 +607,9 @@ class TheAudioDbProvider(HttpProvider,
         except ValueError:
             results = {}
         except:
-            results = cached or {}
+            # cached is the artist already taken out of the response, so put it
+            # back in the response's shape: cache_results would store None otherwise
+            results = {'artists': [cached]} if cached else {}
             ttl = CONFIG.CACHE_TTL['provider_error']
 
         results, ttl = await self.cache_results(mbid, results, ttl)
@@ -1364,7 +1380,40 @@ class WikipediaProvider(HttpProvider, ArtistOverviewMixin):
             'hu', 'id', 'lt', 'lv', 'no', 'ro', 'sk', 'sl', 'tr', 'uk',
             'vi', 'zh'
         )
-        
+
+        # Wikimedia asks for few requests at once and for Retry-After to be
+        # respected after a 429 (mediawiki.org, Wikimedia APIs/Rate limits)
+        self._slots = None
+        self._paused_until = 0.0
+
+    def _paused(self):
+        return time.monotonic() < self._paused_until
+
+    async def get_with_limit(self, url, raise_on_http_error=True, **kwargs):
+        """
+        Wikimedia request with at most WIKIMEDIA_CONCURRENCY in flight. After a
+        429 every request fails at once until its Retry-After (5 s without one)
+        has passed, so callers serve their cached overview in the meantime.
+        """
+        if self._slots is None:
+            # Made here, in the running loop, as asyncio objects bind to a loop
+            self._slots = asyncio.Semaphore(CONFIG.WIKIMEDIA_CONCURRENCY)
+
+        if self._paused():
+            raise ProviderUnavailableException(f'{self._name} paused after 429')
+
+        async with self._slots:
+            if self._paused():
+                raise ProviderUnavailableException(f'{self._name} paused after 429')
+            try:
+                return await super().get_with_limit(url, raise_on_http_error, **kwargs)
+            except ProviderUnavailableException as error:
+                if error.status == 429:
+                    pause = error.retry_after or 5
+                    self._paused_until = max(self._paused_until, time.monotonic() + pause)
+                    logger.warning(f'{self._name} answered 429, pausing for {pause} s')
+                raise
+
     async def get_artist_overview(self, url, ignore_cache=False):
         
         if not ignore_cache:

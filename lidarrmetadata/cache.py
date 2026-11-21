@@ -123,6 +123,14 @@ class PostgresBackend:
             await self._pool.close()
     
     async def _create_table(self, _conn=None):
+        # Caches create their tables on first use, and an artist lookup starts
+        # the tadb and wikipedia caches together; the lock keeps their
+        # CREATE FUNCTION and CREATE TABLE statements from colliding.
+        async with _conn.transaction():
+            await _conn.execute("SELECT pg_advisory_xact_lock(hashtext('lidarrmetadata_cache'));")
+            await self._create_table_unlocked(_conn)
+
+    async def _create_table_unlocked(self, _conn):
 
         logger.debug("checking table")
         result = await _conn.fetchrow(
