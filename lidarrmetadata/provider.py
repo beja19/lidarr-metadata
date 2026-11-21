@@ -1,13 +1,12 @@
 import abc
 import collections
-import contextlib
 import datetime
+import importlib.resources
+import sys
 from datetime import timedelta
 import time
 import pytz
-import imp
 import logging
-import pkg_resources
 import re
 import six
 from timeit import default_timer as timer
@@ -21,8 +20,7 @@ import json
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
-import dateutil.parser
-
+import lidarrmetadata
 from lidarrmetadata.config import get_config
 from lidarrmetadata import limit
 from lidarrmetadata import stats
@@ -87,13 +85,11 @@ def response_url(url: str) -> str:
     for third-party services.
     """
     parsed = urlparse(url)
-    if parsed.netloc.endswith("theaudiodb.com"):
-        new_path = re.sub("^/images/media/", "", parsed.path)
+    parsed = parsed._replace(netloc=parsed.netloc.lower())
+
+    if (parsed.netloc.endswith("theaudiodb.com") and parsed.path.startswith("/images/media/")) or parsed.netloc.endswith("coverartarchive.org"):
         old_parsed = parsed
-        parsed = parsed._replace(
-            netloc=CONFIG.IMAGE_CACHE_HOST,
-            path=f"v1/tadb/{new_path}"
-        )
+        parsed = urlparse(f"http://{CONFIG.IMAGE_CACHE_HOST.rstrip("/")}/cache/{parsed.geturl()}")
         logger.debug(f"Transformed {old_parsed.geturl()} to {parsed.geturl()}")
     else:
         logger.debug(f"Leaving {parsed.geturl()} as is")
@@ -294,6 +290,10 @@ class ArtistOverviewMixin(MixinBase):
     def get_artist_overview(self, artist_id):
         pass
 
+    @abc.abstractmethod
+    def is_enabled(self):
+        pass
+
 
 class ArtistArtworkMixin(MixinBase):
     """
@@ -307,6 +307,10 @@ class ArtistArtworkMixin(MixinBase):
         :param artist_id: ID of artist
         :return: List of results
         """
+        pass
+
+    @abc.abstractmethod
+    def is_enabled(self):
         pass
 
 
@@ -324,6 +328,9 @@ class AlbumArtworkMixin(MixinBase):
         """
         pass
 
+    @abc.abstractmethod
+    def is_enabled(self):
+        pass
 
 class AlbumNameSearchMixin(MixinBase):
     """
@@ -394,7 +401,11 @@ class SpotifyIdMixin(MixinBase):
     """
     Details for a spotify id
     """
-    
+
+    @abc.abstractmethod
+    def is_enabled(self):
+        pass
+
     @abc.abstractmethod
     def album_from_artist(self, artist_id):
         pass
@@ -528,25 +539,26 @@ class HttpProvider(Provider,
                          extra = dict(error_message=getattr(error, "message", None), error=repr(error)))
             raise ProviderUnavailableException(f'{self._name} aiohttp exception',
                                                status=getattr(error, 'status', None),
-                                               retry_after=_retry_after_seconds(getattr(error, 'headers', None)))
+                                               retry_after=_retry_after_seconds(getattr(error, 'headers', None))) from error
         except asyncio.CancelledError:
             logger.debug(f'Task cancelled {url}')
             raise
-        except asyncio.TimeoutError:
-            logger.debug(f'Timeout for {self._name}', extra=dict(url=url))
+        except asyncio.TimeoutError as error:
+            logger.warning(f'Timeout for {self._name}', extra=dict(url=url))
             self._count_request('timeout')
-            raise ProviderUnavailableException(f'{self._name} timeout')
+            raise ProviderUnavailableException(f'{self._name} timeout') from error
         except Exception as error:
-            logger.error(f'Non-aiohttp exceptions occured: {getattr(error, "__dict__", {})}', extra=dict(error = repr(error)))
+            logger.error(f'Non-aiohttp exceptions occurred: {getattr(error, "__dict__", {})}', extra=dict(error = repr(error)))
             raise
         
     async def get_with_limit(self, url, raise_on_http_error=True, **kwargs):
         try:
             with self._limiter.limited():
                 return await self.get(url, raise_on_http_error, **kwargs)
-        except limit.RateLimitedError:
-            logger.debug(f'{self._name} request rate limited')
+        except limit.RateLimitedError as error:
+            logger.warning(f'{self._name} request rate limited', extra=dict(url=url))
             self._count_request('ratelimit')
+            raise ProviderUnavailableException(f'{self._name} request rate limited') from error
 
 class TheAudioDbProvider(HttpProvider,
                          ArtistOverviewMixin,
@@ -562,7 +574,7 @@ class TheAudioDbProvider(HttpProvider,
 
         :param api_key: fanart.tv API key
         :param base_url: Base URL of API. Defaults to
-                         webservice.fanart.tv/v3/music
+                         theaudiodb.com/api/v1/json
         :param use_https: Whether or not to use https. Defaults to True.
         """
         super().__init__('tadb', session, limiter)
@@ -570,7 +582,11 @@ class TheAudioDbProvider(HttpProvider,
         self._api_key = api_key
         self._base_url = base_url
         self.use_https = use_https
-        
+
+    def is_enabled(self):
+        # Exclude test keys as they don't support mbid lookups.
+        return bool(self._api_key and self._api_key.strip() and self._api_key.strip() not in {'1', '2'})
+
     def build_url(self, mbid):
         """
         Builds query url
@@ -664,7 +680,7 @@ class TheAudioDbProvider(HttpProvider,
         }
         
         images = {k: response.get(v) for k, v in image_mapping.items()}
-        return [{'CoverType': key, 'Url': response_url(value)}
+        return [{'CoverType': key, 'Url': response_url(value), 'remoteUrl': value}
                 for key, value in images.items() if value]
 
     @staticmethod
@@ -685,7 +701,7 @@ class FanArtTvProvider(HttpProvider,
                        InvalidateCacheMixin):
     def __init__(self,
                  api_key,
-                 base_url='webservice.fanart.tv/v3/music/',
+                 base_url='webservice.fanart.tv/v3/music',
                  use_https=True,
                  session=None,
                  limiter=None):
@@ -705,6 +721,9 @@ class FanArtTvProvider(HttpProvider,
         
         ## dummy value for initialization, will be picked up from redis later on
         self._last_cache_invalidation = time.time() - 60 * 60 * 24
+
+    def is_enabled(self):
+        return bool(self._api_key and self._api_key.strip())
 
     async def get_artist_images(self, artist_id):
         
@@ -811,8 +830,9 @@ class FanArtTvProvider(HttpProvider,
         logger.debug(url)
         
         try:
-            return await self.get(url, timeout=aiohttp.ClientTimeout(total=5))
+            updates = await self.get(url, timeout=aiohttp.ClientTimeout(total=5))
 
+            return updates if updates is not None else []
         except Exception as error:
             logger.error(f'Error getting fanart updates: {error}')
             return []
@@ -840,7 +860,7 @@ class FanArtTvProvider(HttpProvider,
         if url[-1] != '/':
             url += '/'
         url += mbid
-        url += '/?api_key={api_key}'.format(api_key=self._api_key)
+        url += '?api_key={api_key}'.format(api_key=self._api_key)
         return url
 
     @staticmethod
@@ -852,7 +872,7 @@ class FanArtTvProvider(HttpProvider,
         """
         images = {'Cover': util.first_key_item(response, 'albumcover'),
                   'Disc': util.first_key_item(response, 'cdart')}
-        return [{'CoverType': key, 'Url': value['url'].replace('https', 'http')}
+        return [{'CoverType': key, 'Url': value['url']}
                 for key, value in images.items() if value]
 
     @staticmethod
@@ -866,7 +886,7 @@ class FanArtTvProvider(HttpProvider,
                   'Fanart': util.first_key_item(response, 'artistbackground'),
                   'Logo': util.first_key_item(response, 'hdmusiclogo'),
                   'Poster': util.first_key_item(response, 'artistthumb')}
-        return [{'CoverType': key, 'Url': value['url'].replace('https', 'http')}
+        return [{'CoverType': key, 'Url': value['url']}
                 for key, value in images.items() if value]
 
 class SpotifyAuthProvider(HttpProvider,
@@ -1188,7 +1208,7 @@ class MusicbrainzDbProvider(Provider,
 
     @staticmethod
     def _build_caa_url(release_id, image_id):
-        return 'https://imagecache.lidarr.audio/v1/caa/{}/{}-1200.jpg'.format(release_id, image_id)
+        return 'https://coverartarchive.org/release/{}/{}-1200.jpg'.format(release_id, image_id)
     
     @classmethod
     def _load_artist(cls, data):
@@ -1223,7 +1243,7 @@ class MusicbrainzDbProvider(Provider,
                 cover_type = type_mapping.get(result['type'], None)
                 if cover_type is not None and cover_type not in art:
                     art[cover_type] = cls._build_caa_url(result['release_gid'], result['image_id'])
-            release_group['images'] = [{'CoverType': art_type, 'Url': url} for art_type, url in art.items()]
+            release_group['images'] = [{'CoverType': art_type, 'Url': response_url(url), 'remoteUrl': url} for art_type, url in art.items()]
         else:
             release_group['images'] = []
             
@@ -1268,7 +1288,7 @@ class MusicbrainzDbProvider(Provider,
     async def get_release_groups_by_artist(self, artist_id):
         results = await self.query_from_file('release_group_search_artist_mbid.sql', artist_id)
         
-        logger.debug("got artist release groups")
+        logger.debug(f"got release groups for artist {artist_id}")
 
         return [{'Id': result['gid'],
                  'OldIds': result['oldids'],
@@ -1290,7 +1310,7 @@ class MusicbrainzDbProvider(Provider,
         :param kwargs: Keyword args to pass to cursor.execute
         :return: List of dict with column: value results
         """
-        filename = pkg_resources.resource_filename('lidarrmetadata.sql', sql_file)
+        filename = importlib.resources.files('lidarrmetadata.sql') / sql_file
 
         with open(filename, 'r') as sql:
             return await self.map_query(sql.read(), *args)
@@ -1332,11 +1352,21 @@ class SpotifyProvider(Provider,
 
     def __init__(self, client_id, client_secret):
         super(SpotifyProvider, self).__init__()
-        
-        client_credentials_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
-        self.spotify = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+
+        self._client_id = client_id
+        self._client_secret = client_secret
+
+        if self.is_enabled():
+            client_credentials_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
+            self.spotify = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+
+    def is_enabled(self):
+        return bool(self._client_id and self._client_id.strip() and self._client_secret and self._client_secret.strip())
 
     def album_from_artist(self, artist_id):
+        if not self.is_enabled():
+            return None
+
         top_tracks = self.spotify.artist_top_tracks(artist_id, country='US')
 
         if not top_tracks['tracks']:
@@ -1351,6 +1381,9 @@ class SpotifyProvider(Provider,
                 'AlbumSpotifyId': album['id']}
 
     def album(self, album_id):
+        if not self.is_enabled():
+            return None
+
         album = self.spotify.album(album_id)
         artist = album['artists'][0]
         
@@ -1414,6 +1447,9 @@ class WikipediaProvider(HttpProvider, ArtistOverviewMixin):
                     logger.warning(f'{self._name} answered 429, pausing for {pause} s')
                 raise
 
+    def is_enabled(self):
+        return True
+        
     async def get_artist_overview(self, url, ignore_cache=False):
         
         if not ignore_cache:
@@ -1428,6 +1464,8 @@ class WikipediaProvider(HttpProvider, ArtistOverviewMixin):
         
         try:
             summary = await self.wikidata_get_summary_from_url(url) if 'wikidata' in url else await self.wikipedia_get_summary_from_url(url)
+            summary = summary.strip()
+
             ttl = CONFIG.CACHE_TTL['wikipedia']
             await util.WIKI_CACHE.set(url, summary, ttl=ttl)
             return summary, utcnow() + timedelta(seconds = ttl)

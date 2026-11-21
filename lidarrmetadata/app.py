@@ -4,7 +4,7 @@ import functools
 import asyncio
 
 from quart import Quart, abort, make_response, request, jsonify, redirect, url_for
-from quart.exceptions import HTTPStatusException
+from werkzeug.exceptions import HTTPException
 
 import redis
 import sentry_sdk
@@ -12,7 +12,6 @@ from sentry_sdk.integrations.flask import FlaskIntegration
 import datetime
 from datetime import timedelta
 from dateutil import parser
-import time
 import logging
 import aiohttp
 from timeit import default_timer as timer
@@ -33,6 +32,8 @@ logger.info('Have app logger')
 
 app = Quart(__name__)
 app.config.from_object(config.get_config())
+
+logger.info(f"Running LidarrMetadataAPI v{lidarrmetadata.__version__}")
 
 if app.config['SENTRY_DSN']:
     if app.config['SENTRY_REDIS_HOST'] is not None:
@@ -101,9 +102,9 @@ def handle_error(e):
     sentry_sdk.capture_exception(e)
     return jsonify(error='Internal server error'), 500
 
-@app.errorhandler(HTTPStatusException)
+@app.errorhandler(HTTPException)
 async def handle_http_error(e):
-    return jsonify(error = e.description), e.status_code
+    return jsonify(error = e.description), e.code
 
 @app.errorhandler(api.ReleaseGroupNotFoundException)
 async def handle_error(e):
@@ -194,10 +195,24 @@ async def refresh_artist_route(mbid):
     if uuid_validation_response:
         return uuid_validation_response
 
+    include_albums = request.args.get('include_albums', False)
+    albums = []
+
+    if include_albums:
+        albums = [album['Id'] for album in await api.get_artist_albums(mbid)]
+
+        await asyncio.gather(
+            util.ALBUM_CACHE.multi_set([(album, None) for album in albums], ttl=0, timeout=None)
+        )
+
     await util.ARTIST_CACHE.set(mbid, None)
-    base_url = app.config['CLOUDFLARE_URL_BASE'] + '/' +  app.config['ROOT_PATH'].lstrip('/').rstrip('/')
-    await invalidate_cloudflare([f'{base_url}/artist/{mbid}'])
-    return jsonify(success=True)
+
+    base_url = app.config['CLOUDFLARE_URL_BASE'] + app.config['ROOT_PATH'].rstrip('/')
+    invalidated = ([f'{base_url}/artist/{mbid}'] + [f'{base_url}/album/{album}' for album in albums])
+
+    await invalidate_cloudflare(invalidated)
+
+    return jsonify({'success': True, 'invalidated': len(invalidated)})
 
 
 @app.route('/album/<mbid>', methods=['GET'])
@@ -572,6 +587,10 @@ async def spotify_lookup_album(spotify_id):
         await util.SPOTIFY_CACHE.set(spotify_id, 0, ttl=None)
         return jsonify(error='Not found'), 404
 
+    if spotifyalbum is None:
+        await util.SPOTIFY_CACHE.set(spotify_id, 0, ttl=app.config['CACHE_TTL']['cloudflare'])
+        return jsonify(error='Not found'), 404
+
     spotifyalbum = await spotify_lookup_by_text_search(spotifyalbum)
     if spotifyalbum is None:
         return jsonify(error='Not found'), 404
@@ -643,7 +662,7 @@ async def invalidate_cache():
     
     ## this is used as a prefix in various places to make sure
     ## we keep cache for different metadata versions separate
-    base_url = app.config['CLOUDFLARE_URL_BASE'] + '/' +  app.config['ROOT_PATH'].lstrip('/').rstrip('/')
+    base_url = app.config['CLOUDFLARE_URL_BASE'] + app.config['ROOT_PATH'].rstrip('/')
     
     ## Use a cache key to make sure we don't trigger this in parallel
     invalidation_in_progress_key = base_url + 'CacheInvalidationInProgress'
@@ -703,12 +722,24 @@ async def invalidate_cloudflare(files):
     zoneid = app.config['CLOUDFLARE_ZONE_ID']
     if not zoneid:
         return
-    
+
+    if not app.config['CLOUDFLARE_URL_BASE']:
+        raise ValueError('CLOUDFLARE_URL_BASE is not defined')
+
     url = f'https://api.cloudflare.com/client/v4/zones/{zoneid}/purge_cache'
-    headers = {'X-Auth-Email': app.config['CLOUDFLARE_AUTH_EMAIL'],
-               'X-Auth-Key': app.config['CLOUDFLARE_AUTH_KEY'],
-               'Content-Type': 'application/json'}
-    
+
+    headers = {'Content-Type': 'application/json'}
+
+    if app.config['CLOUDFLARE_API_TOKEN']:
+        headers['Authorization'] = 'Bearer {0}'.format(app.config['CLOUDFLARE_API_TOKEN'])
+    elif app.config['CLOUDFLARE_AUTH_EMAIL'] and app.config['CLOUDFLARE_AUTH_KEY']:
+        headers['X-Auth-Email'] = '{0}'.format(app.config['CLOUDFLARE_AUTH_EMAIL'])
+        headers['X-Auth-Key'] = '{0}'.format(app.config['CLOUDFLARE_AUTH_KEY'])
+    else:
+        raise ValueError('Credentials for cloudflare are not defined')
+
+    logger.info(f"In process of invalidating {len(files)} cached pages")
+
     async with aiohttp.ClientSession() as session:
         # cloudflare only accepts 30 files at a time
         for i in range(0, len(files), 30):

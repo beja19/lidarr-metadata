@@ -1,0 +1,161 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":disableRateLimiting",
+    ":semanticCommits"
+  ],
+  dependencyDashboardTitle: "Renovate Dashboard",
+  enabledManagers: [
+    "dockerfile",
+    "github-actions",
+    "poetry",
+    "mise",
+  ],
+  minimumReleaseAgeBehaviour: "timestamp-optional",
+  minimumReleaseAge: "3 days",
+  schedule: [
+    "* * 5 * *"
+  ],
+  suppressNotifications: [
+    "prEditedNotification",
+    "prIgnoreNotification"
+  ],
+  lockFileMaintenance: {
+    enabled: true,
+    commitMessageExtra: "({{manager}})",
+    additionalBranchPrefix: "{{manager}}-",
+  },
+  registryAliases: {
+    "mirror.gcr.io": "docker.io",
+  },
+  packageRules: [
+    {
+      description: "Mise Tools Group",
+      groupName: "mise-tools",
+      matchManagers: ["mise"],
+      group: {
+        commitMessageTopic: "{{{groupName}}} group",
+      },
+    },
+    {
+      description: "GitHub Actions Group",
+      groupName: "github-actions",
+      matchManagers: ["github-actions"],
+      matchPackageNames: [
+        "/^actions\//",
+        "/^github\//",
+        "/^docker\//",
+      ],
+      group: {
+        commitMessageTopic: "{{{groupName}}} group",
+      },
+      separateMajorMinor: false,
+    },
+    {
+      description: "Poetry Group",
+      groupName: "poetry",
+      matchManagers: ["poetry"],
+      matchPackageNames: ["*"],
+      group: {
+        commitMessageTopic: "{{{groupName}}} group",
+      },
+      separateMajorMinor: false,
+    },
+    {
+      description: "Auto-merge trusted GitHub Actions",
+      matchManagers: ["github-actions"],
+      matchPackageNames: [
+        "/^actions\//",
+        "/^github\//",
+        "/^docker\//"
+      ],
+      automerge: true,
+      automergeType: "pr",
+      matchUpdateTypes: ["minor", "patch", "digest"],
+      minimumReleaseAge: "12 hours",
+      ignoreTests: false,
+    },
+    {
+      matchUpdateTypes: ["major"],
+      semanticCommitType: "feat",
+      commitMessagePrefix: "{{semanticCommitType}}({{semanticCommitScope}})!:",
+      commitMessageExtra: "({{currentVersion}} ➔ {{newVersion}})",
+    },
+    {
+      matchUpdateTypes: ["minor"],
+      semanticCommitType: "feat",
+      commitMessageExtra: "({{currentVersion}} ➔ {{newVersion}})",
+    },
+    {
+      matchUpdateTypes: ["patch"],
+      semanticCommitType: "fix",
+      commitMessageExtra: "({{currentVersion}} ➔ {{newVersion}})",
+    },
+    {
+      matchUpdateTypes: ["digest"],
+      semanticCommitType: "fix",
+      commitMessageExtra: "({{currentDigestShort}} ➔ {{newDigestShort}})",
+    },
+    {
+      matchDatasources: ["docker"],
+      semanticCommitScope: "container",
+      commitMessageTopic: "image {{depName}}",
+    },
+    {
+      matchManagers: ["github-actions"],
+      semanticCommitType: "ci",
+      semanticCommitScope: "github-action",
+      commitMessageTopic: "action {{depName}}",
+    },
+    {
+      matchManagers: ["poetry"],
+      semanticCommitType: "chore",
+      semanticCommitScope: "poetry",
+      commitMessageTopic: "poetry {{depName}}",
+    },
+    {
+      matchManagers: ["mise"],
+      semanticCommitType: "chore",
+      semanticCommitScope: "mise",
+      commitMessageTopic: "tool {{depName}}",
+    },
+    {
+      matchUpdateTypes: ["major"],
+      addLabels: ["type/major"],
+    },
+    {
+      matchUpdateTypes: ["minor"],
+      addLabels: ["type/minor"],
+    },
+    {
+      matchUpdateTypes: ["patch"],
+      addLabels: ["type/patch"],
+    },
+    {
+      matchUpdateTypes: ["digest"],
+      addLabels: ["type/digest"],
+    },
+    {
+      matchDatasources: ["docker"],
+      addLabels: ["renovate/container"],
+    },
+    {
+      matchManagers: ["github-actions"],
+      addLabels: ["renovate/github-action"],
+    },
+    {
+      matchDatasources: ["pypi"],
+      addLabels: ["renovate/python"],
+    },
+    {
+      description: ["Allowed python version"],
+      matchDatasources: [
+        "docker",
+        "github-tags",
+      ],
+      matchPackageNames: ["/python/"],
+      allowedVersions: "==3.13"
+    },
+  ]
+}

@@ -2,21 +2,14 @@ SELECT
   row_to_json(item_data) item
   FROM (
     SELECT
-      release_group.gid as AlbumId,
-      release_group.name as AlbumTitle,
-      artist.gid as ArtistId,
-      COALESCE(
-        make_date(
-          release_group_meta.first_release_date_year,
-          release_group_meta.first_release_date_month,
-          release_group_meta.first_release_date_day
-        ),
-        make_date(
-          COALESCE(release_group_meta.first_release_date_year, 1),
-          COALESCE(release_group_meta.first_release_date_month, 1),
-          COALESCE(release_group_meta.first_release_date_day, 1)
-        )
-      ) as ReleaseDate
+      release_group.gid AS AlbumId,
+      release_group.name AS AlbumTitle,
+      artist.gid AS ArtistId,
+      make_date(
+        release_group_meta.first_release_date_year,
+        COALESCE(release_group_meta.first_release_date_month, 1),
+        COALESCE(release_group_meta.first_release_date_day, 1)
+      ) AS ReleaseDate
 
     FROM release_group
     LEFT JOIN release_group_meta ON release_group_meta.id = release_group.id

@@ -1,9 +1,5 @@
-import multiprocessing
-import os
-
 import gunicorn.app.base
 
-import lidarrmetadata
 from lidarrmetadata.app import app
 from lidarrmetadata.config import get_config
 
@@ -35,8 +31,9 @@ def main():
 
     options = {
         'bind': '0.0.0.0:{port}'.format(port=config.HTTP_PORT),
-        'log_level': 'debug',
-        'workers': 1,
+        'loglevel': 'debug',
+        'workers': config.HTTP_WORKERS,
+        'threads': 2,
         'worker_class': 'uvicorn.workers.UvicornWorker'
     }
 

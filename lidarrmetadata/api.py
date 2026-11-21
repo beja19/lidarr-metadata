@@ -1,17 +1,11 @@
-import os
 import uuid
 import functools
 import asyncio
 
-import redis
-import datetime
 from datetime import timedelta
-import time
 import logging
-import aiohttp
 from timeit import default_timer as timer
 
-import lidarrmetadata
 from lidarrmetadata import config
 from lidarrmetadata import provider
 from lidarrmetadata import util
@@ -23,15 +17,8 @@ logger.info('Have api logger')
 
 CONFIG = config.get_config()
 
-# Providers whose first argument is an API key they cannot answer without. With
-# an empty key one is not started, rather than called on every lookup to fail.
-KEYED_PROVIDERS = {'FANARTTVPROVIDER', 'THEAUDIODBPROVIDER'}
-
 # Set up providers
 for provider_name, (args, kwargs) in CONFIG.PROVIDERS.items():
-    if provider_name in KEYED_PROVIDERS and not (args and args[0]):
-        logger.info(f'{provider_name} not started: no API key')
-        continue
     provider_key = list(filter(lambda k: k.upper() == provider_name,
                                provider.PROVIDER_CLASSES.keys()))[0]
     lower_kwargs = {k.lower(): v for k, v in kwargs.items()}
@@ -56,7 +43,7 @@ async def get_overview(links, mbid=None):
 
     overview = ''
     expiry = provider.utcnow() + timedelta(days=365)
-    overview_providers = provider.get_providers_implementing(provider.ArtistOverviewMixin)    
+    overview_providers = [p for p in provider.get_providers_implementing(provider.ArtistOverviewMixin) if p.is_enabled()]
 
     if overview_providers:
         wikidata_link = next(filter(
@@ -127,7 +114,7 @@ async def get_artist_info_multi(mbids):
     start = timer()
 
     artist_providers = provider.get_providers_implementing(provider.ArtistByIdMixin)
-    artist_art_providers = provider.get_providers_implementing(provider.ArtistArtworkMixin)
+    artist_art_providers = [p for p in provider.get_providers_implementing(provider.ArtistArtworkMixin) if p.is_enabled()]
     
     if not artist_providers:
         # 500 error if we don't have an artist provider since it's essential
@@ -232,8 +219,8 @@ async def get_release_group_info_multi(mbids):
     start = timer()
     
     release_group_providers = provider.get_providers_implementing(provider.ReleaseGroupByIdMixin)
-    album_art_providers = provider.get_providers_implementing(provider.AlbumArtworkMixin)
-    
+    album_art_providers = [p for p in provider.get_providers_implementing(provider.AlbumArtworkMixin) if p.is_enabled()]
+
     if not release_group_providers:
         raise MissingProviderException('No album provider available')
 

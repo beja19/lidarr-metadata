@@ -1,29 +1,28 @@
-FROM python:3.9-alpine
+# syntax=docker/dockerfile:1
 
-ARG UID=1000
+FROM mirror.gcr.io/python:3.13-alpine3.24@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
+
 ARG COMMIT_HASH=''
 ARG GIT_BRANCH=''
 
-ENV COMMIT_HASH $COMMIT_HASH
-ENV GIT_BRANCH $GIT_BRANCH
+ENV COMMIT_HASH=$COMMIT_HASH \
+    GIT_BRANCH=$GIT_BRANCH
 
-WORKDIR /metadata
-COPY . /metadata
+USER root
+WORKDIR /app
 
-ENV POETRY_VIRTUALENVS_CREATE=false \
-        POETRY_NO_INTERACTION=1 \
-        POETRY_CACHE_DIR='/var/cache/pypoetry' \
-        POETRY_HOME='/usr/local'
+COPY --chown=0:0 --chmod=755 . /app
 
-RUN apk update && \
-        apk add postgresql-libs && \
-        apk add --virtual .build-deps alpine-sdk musl-dev postgresql-dev && \
-        pip --disable-pip-version-check --no-cache-dir install poetry && \
-        poetry install && \
-        apk --purge del .build-deps
+RUN --mount=type=bind,from=ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d,source=/uv,target=/usr/local/bin/uv \
+    set -eux; \
+    apk add --no-cache --upgrade \
+        ca-certificates; \
+    uv build --no-cache --wheel; \
+    uv pip install --system dist/*.whl; \
+    chown -R root:root /app; \
+    chmod -R 755 /app; \
+    rm -rf /root/.cache /var/log/* /tmp/*;
 
-RUN adduser --system -u $UID metadata
-
-USER metadata
+USER nobody:nogroup
 
 ENTRYPOINT ["lidarr-metadata-server"]

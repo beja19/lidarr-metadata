@@ -7,14 +7,14 @@ SELECT
         SELECT gid
           FROM release_group_gid_redirect
          WHERE release_group_gid_redirect.new_id = release_group.id
-      ) as OldIds,
+      ) AS OldIds,
       release_group.comment AS Disambiguation,
       release_group.name AS Title,
       array(
         SELECT name
           FROM release_group_alias
          WHERE release_group_alias.release_group = release_group.id
-           AND (release_group_alias.type is NULL OR release_group_alias.type = 1)
+           AND (release_group_alias.type IS NULL OR release_group_alias.type = 1)
 
         UNION
 
@@ -22,7 +22,7 @@ SELECT
           FROM release
          WHERE release.release_group = release_group.id
            AND release.name != release_group.name
-      ) as Aliases,
+      ) AS Aliases,
       COALESCE(release_group_primary_type.name, 'Other') AS Type,
       array(
         SELECT name
@@ -31,18 +31,11 @@ SELECT
          WHERE rgstj.release_group = release_group.id
          ORDER BY name ASC
       ) AS SecondaryTypes,
-      COALESCE(
-        make_date(
-          release_group_meta.first_release_date_year,
-          release_group_meta.first_release_date_month,
-          release_group_meta.first_release_date_day
-        ),
-        make_date(
-          COALESCE(release_group_meta.first_release_date_year, 1),
-          COALESCE(release_group_meta.first_release_date_month, 1),
-          COALESCE(release_group_meta.first_release_date_day, 1)
-        )
-      )as ReleaseDate,
+      make_date(
+        release_group_meta.first_release_date_year,
+        COALESCE(release_group_meta.first_release_date_month, 1),
+        COALESCE(release_group_meta.first_release_date_day, 1)
+      ) AS ReleaseDate,
       artist.gid AS ArtistId,
       array(
 	SELECT DISTINCT
@@ -56,14 +49,14 @@ SELECT
 	   AND artist_credit_name.position = 0
 
          UNION
-               
+
         SELECT
           artist.gid
           FROM artist
                  JOIN artist_credit_name ON artist_credit_name.artist = artist.id
          WHERE artist_credit_name.artist_credit = release_group.artist_credit
            AND artist_credit_name.position = 0
-      ) AS ArtistIds,	
+      ) AS ArtistIds,
       json_build_object(
         'Count', COALESCE(release_group_meta.rating_count, 0),
         'Value', release_group_meta.rating::decimal / 10
@@ -71,7 +64,9 @@ SELECT
       array(
         SELECT url.url
           FROM url
-                 JOIN l_release_group_url ON l_release_group_url.entity0 = release_group.id AND l_release_group_url.entity1 = url.id
+          JOIN l_release_group_url ON l_release_group_url.entity0 = release_group.id AND l_release_group_url.entity1 = url.id
+          JOIN link ON l_release_group_url.link = link.id
+         WHERE NOT link.ended
       ) AS Links,
       array(
         SELECT INITCAP(genre.name)
@@ -80,18 +75,28 @@ SELECT
                  JOIN release_group_tag ON release_group_tag.tag = tag.id
          WHERE release_group_tag.release_group = release_group.id
            AND release_group_tag.count > 0
+         ORDER BY release_group_tag.count DESC
       ) AS Genres,
       (
 	SELECT
 	  json_agg(row_to_json(images_data))
 	  FROM (
-	    SELECT unnest(types) AS type,
-		   release.gid AS release_gid,
-		   index_listing.id AS image_id
-	      FROM cover_art_archive.index_listing
-		     JOIN release ON index_listing.release = release.id
+	    SELECT DISTINCT ON (type)
+	        unnest(types) AS type,
+		      release.gid AS release_gid,
+		      index_listing.id AS image_id
+	     FROM cover_art_archive.index_listing
+		   JOIN release ON index_listing.release = release.id
+		   LEFT JOIN (
+		      SELECT release, date_year, date_month, date_day
+		      FROM musicbrainz.release_country
+		      UNION ALL
+		      SELECT release, date_year, date_month, date_day
+		      FROM musicbrainz.release_unknown_country
+		   ) release_event ON release_event.release = release.id
+		   FULL OUTER JOIN cover_art_archive.release_group_cover_art ON release_group_cover_art.release = release.id
 	     WHERE release.release_group = release_group.id
-	     ORDER BY index_listing.ordering ASC
+	     ORDER BY type, release_group_cover_art.release, index_listing.ordering, release_event.date_year, release_event.date_month, release_event.date_day
 	  ) images_data
       ) AS images,
       (
@@ -104,21 +109,18 @@ SELECT
                 SELECT gid
                   FROM release_gid_redirect
                  WHERE release_gid_redirect.new_id = release.id
-              ) as OldIds,
+              ) AS OldIds,
               release.name AS Title,
               release.comment AS Disambiguation,
               release_status.name AS Status,
               (
-                SELECT 
-                  COALESCE(
-                    MIN(make_date(date_year, date_month, date_day)),
-                    MIN(make_date(COALESCE(date_year, 1), COALESCE(date_month, 1), COALESCE(date_day, 1)))
-                    )
+                SELECT
+                  MIN(make_date(date_year, COALESCE(date_month, 1), COALESCE(date_day, 1)))
                   FROM (
                     SELECT date_year, date_month, date_day
                       FROM release_country
                      WHERE release_country.release = release.id
-                           
+
                      UNION
 
                     SELECT date_year, date_month, date_day
@@ -127,16 +129,20 @@ SELECT
                   ) dates
               ) AS ReleaseDate,
               array(
-                SELECT name FROM label
-                                   JOIN release_label ON release_label.label = label.id
+                SELECT label.name
+                  FROM label
+                  JOIN release_label ON release_label.label = label.id
                  WHERE release_label.release = release.id
+                 AND NOT label.ended
                  ORDER BY name ASC
               ) AS Label,
               array(
-                SELECT name FROM area
-                                   JOIN country_area ON country_area.area = area.id
-                                   JOIN release_country ON release_country.country = country_area.area
+                SELECT area.name
+                  FROM area
+                  JOIN country_area ON country_area.area = area.id
+                  JOIN release_country ON release_country.country = country_area.area
                  WHERE release_country.release = release.id
+                 AND NOT area.ended
               ) AS Country,
               array(
                 SELECT json_build_object(
@@ -159,13 +165,13 @@ SELECT
                         SELECT gid
                           FROM track_gid_redirect
                          WHERE track_gid_redirect.new_id = track.id
-                      ) as OldIds,
+                      ) AS OldIds,
                       recording.gid AS RecordingId,
                       array(
                         SELECT gid
                           FROM recording_gid_redirect
                          WHERE recording_gid_redirect.new_id = recording.id
-                      ) as OldRecordingIds,
+                      ) AS OldRecordingIds,
                       artist.gid AS ArtistId,
                       track.name AS TrackName,
                       track.length AS DurationMs,
@@ -179,10 +185,10 @@ SELECT
                              JOIN recording ON track.recording = recording.id
                      WHERE medium.release = release.id
                        AND artist_credit_name.position = 0
-                       AND recording.video = FALSE
-                       AND track.is_data_track = FALSE
+                       AND NOT recording.video
+                       AND NOT track.is_data_track
                   ) track_data
-              ) AS Tracks                                                                                     
+              ) AS Tracks
               FROM release
                      JOIN release_status ON release_status.id = release.status
              WHERE release.release_group = release_group.id

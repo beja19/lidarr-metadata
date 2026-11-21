@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import datetime
 from datetime import timedelta
 import logging
 from timeit import default_timer as timer
@@ -9,7 +8,6 @@ import sys
 import aiohttp
 import sentry_sdk
 
-import lidarrmetadata
 from lidarrmetadata.config import get_config
 from lidarrmetadata import provider
 from lidarrmetadata import util
@@ -63,13 +61,17 @@ async def update_fanart(count = 500, max_ttl = 60 * 60):
     # Don't make these count towards rate limiting.
     async with aiohttp.ClientSession(
             timeout = aiohttp.ClientTimeout(sock_read = 2), 
-            connector = aiohttp.TCPConnector(limit_per_host=10)
+            connector = aiohttp.TCPConnector(limit_per_host=CONFIG.FANART_CONNECTIONS)
     ) as session:
         fanart_provider = provider.FanArtTvProvider(
             CONFIG.FANART_KEY, 
             session=session, 
             limiter=limit.NullRateLimiter()
         )
+
+        if not fanart_provider.is_enabled():
+            logger.info(f"FanArtTvProvider is disabled")
+            return
 
         while True:
             keys = await util.FANART_CACHE.get_stale(count, provider.utcnow() + timedelta(seconds = max_ttl))
@@ -97,6 +99,10 @@ async def update_tadb(count = 500, max_ttl = 60 * 60):
             session=session, 
             limiter=limit.NullRateLimiter()
         )
+
+        if not tadb_provider.is_enabled():
+            logger.info(f"TheAudioDbProvider is disabled")
+            return
 
         while True:
             keys = await util.TADB_CACHE.get_stale(count, provider.utcnow() + timedelta(seconds = max_ttl))

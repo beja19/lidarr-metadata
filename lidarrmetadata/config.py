@@ -308,7 +308,7 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
         'redis': DAYS * 7,
         'fanart': DAYS * 30,
         'tadb': DAYS * 30,
-        'wikipedia': DAYS * 7
+        'wikipedia': DAYS * 30
     }
     
     CACHE_CONFIG = {
@@ -316,6 +316,7 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
             'cache': 'aiocache.RedisCache',
             'endpoint': REDIS_HOST,
             'port': REDIS_PORT,
+            'db': 0,
             'namespace': 'lm3.7',
             'serializer': {
                 'class': 'lidarrmetadata.cache.CompressionSerializer'
@@ -420,7 +421,7 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     DEBUG = False
 
     # Enable sending stats
-    ENABLE_STATS = True
+    ENABLE_STATS = False
 
     # External request parameters
     # Class of limiter
@@ -430,7 +431,7 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     # Rate limit time delta in ms
     EXTERNAL_LIMIT_TIME_DELTA = 1000
     # Request timeout in ms
-    EXTERNAL_TIMEOUT = 250
+    EXTERNAL_TIMEOUT = 1000
     # User-Agent sent with every provider request, followed by aiohttp/<version>
     # as Wikimedia's User-Agent policy asks. Wikimedia refuses generic library
     # ones such as aiohttp's default with 403, and TheAudioDB's Cloudflare
@@ -454,10 +455,13 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     FANART_API_DELAY_SECONDS = 8 * 24 * 60 * 60
 
     # TADB API credentials
-    TADB_KEY = '1'
+    TADB_KEY = ''
 
     # Port to use
     HTTP_PORT = 5001
+    # Server worker processes. Each has its own provider state, so the Wikimedia
+    # cap and 429 pause apply per worker.
+    HTTP_WORKERS = 2
 
     # LastFM API connection details
     LASTFM_KEY = ''
@@ -465,8 +469,8 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
 
     # Spotify app details
     SPOTIFY_REDIRECT_URL = ''
-    SPOTIFY_ID = 'replaceme'
-    SPOTIFY_SECRET = 'replaceme'
+    SPOTIFY_ID = ''
+    SPOTIFY_SECRET = ''
     SPOTIFY_MATCH_MIN_RATIO = 0.8
 
     # Whether or not running in production
@@ -504,6 +508,7 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     
     # Cloudflare details for invalidating cache on update
     CLOUDFLARE_ZONE_ID = ''
+    CLOUDFLARE_API_TOKEN = ''
     CLOUDFLARE_AUTH_EMAIL = ''
     CLOUDFLARE_AUTH_KEY = ''
     CLOUDFLARE_URL_BASE = ''
@@ -513,10 +518,11 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     TESTING = False
 
     # Hosted cache for third-party images
-    IMAGE_CACHE_HOST = "imagecache.lidarr.audio"
+    IMAGE_CACHE_HOST = "images.lidarr.audio"
 
-    # Number of concurrent TADB connections for crawler
-    TADB_CONNECTIONS = 5
+    # Number of concurrent connections for crawler
+    FANART_CONNECTIONS = 1
+    TADB_CONNECTIONS = 1
 
 
 class TestConfig(DefaultConfig):

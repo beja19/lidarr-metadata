@@ -10,7 +10,6 @@ from aiocache import cached
 from lidarrmetadata import api
 from lidarrmetadata import config
 from lidarrmetadata import provider
-from lidarrmetadata import util
 
 async def _parse_itunes_chart(URL, count):
     async with aiohttp.ClientSession() as session:
@@ -47,12 +46,12 @@ async def get_billboard_200_albums_chart(count=10):
     :param count: Number of results to return. Defaults to 10
     :return: Chart response for billboard-200
     """
-    results = billboard.ChartData('billboard-200')
+    chart = await asyncio.to_thread(billboard.ChartData, 'billboard-200')
 
     search_provider = provider.get_providers_implementing(provider.AlbumNameSearchMixin)[0]
 
     search_results = []
-    for result in results:
+    for result in chart.entries:
         search_result = await search_provider.search_album_name(result.title, artist_name=result.artist)
         if search_result:
             search_result = search_result[0]
