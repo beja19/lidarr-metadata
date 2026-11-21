@@ -443,6 +443,39 @@ async def search_all():
 
     return await add_cache_control_header(jsonify(results), validity)
 
+@app.route('/recording/isrc', methods=['POST'])
+async def recording_by_isrc():
+    """
+    Estate fork, for aurral-shim. Body: a JSON list of ISRCs, or of {"isrc": ..., "album": ...}
+    where album is the title a song service gave. Answers every recording with each ISRC, with
+    the album to file it under (sql/recording_by_isrc.sql), in one query.
+    """
+    body = await request.json
+    if not isinstance(body, list) or len(body) > 100:
+        return jsonify(error='Bad Request - expected a JSON list of at most 100 ISRCs'), 400
+
+    isrcs, albums = [], []
+    for item in body:
+        if isinstance(item, str):
+            isrc, album = item, ''
+        elif isinstance(item, dict) and isinstance(item.get('isrc'), str):
+            isrc, album = item['isrc'], item.get('album') or ''
+        else:
+            return jsonify(error='Bad Request - each item is an ISRC or {"isrc", "album"}'), 400
+        isrc = isrc.strip().upper()
+        if len(isrc) != 12 or not isrc.isalnum() or not isinstance(album, str):
+            return jsonify(error='Bad Request - not an ISRC: ' + isrc[:20]), 400
+        isrcs.append(isrc)
+        albums.append(album[:500])
+
+    if not isrcs:
+        return jsonify([])
+
+    recording_provider = provider.get_providers_implementing(provider.RecordingByIsrcMixin)[0]
+    rows = await recording_provider.get_recordings_by_isrcs(isrcs, albums)
+    return jsonify([{key: (str(value) if key.endswith('_id') and value is not None else value)
+                     for key, value in row.items()} for row in rows])
+
 @app.route('/search/fingerprint', methods=['POST'])
 async def search_fingerprint():
     ids = await request.json

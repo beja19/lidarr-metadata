@@ -341,6 +341,20 @@ class AlbumNameSearchMixin(MixinBase):
         """
         pass
 
+class RecordingByIsrcMixin(MixinBase):
+    """
+    Gets recordings, each with the album to file it under, by ISRC (estate fork, for aurral-shim)
+    """
+
+    @abc.abstractmethod
+    def get_recordings_by_isrcs(self, isrcs, albums):
+        """
+        :param isrcs: List of ISRCs
+        :param albums: Album titles in the same order, '' where there is none
+        :return: List of dicts, one per recording found
+        """
+        pass
+
 class DataVintageMixin(MixinBase):
     """
     Returns vintage of data in use
@@ -1018,7 +1032,8 @@ class MusicbrainzDbProvider(Provider,
                             ReleaseGroupByArtistMixin,
                             ReleaseGroupByIdMixin,
                             ReleaseGroupIdListMixin,
-                            SeriesMixin):
+                            SeriesMixin,
+                            RecordingByIsrcMixin):
     """
     Provider for directly querying musicbrainz database
     """
@@ -1214,7 +1229,10 @@ class MusicbrainzDbProvider(Provider,
         results = await self.query_from_file('release_group_by_recording_ids.sql', len(rids), rids)
 
         return [item['rgid'] for item in results]
-    
+
+    async def get_recordings_by_isrcs(self, isrcs, albums):
+        return await self.query_from_file('recording_by_isrc.sql', isrcs, albums)
+
     async def redirect_old_release_group_id(self, id):
         results = await self.query_from_file('release_group_redirect.sql', id)
         if results:
