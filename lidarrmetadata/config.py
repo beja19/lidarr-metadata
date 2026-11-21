@@ -440,6 +440,12 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     # Wikimedia requests in flight at once. Wikimedia's rate limits page asks
     # for 3 or fewer; a 429 pauses all of them for its Retry-After.
     WIKIMEDIA_CONCURRENCY = 3
+    # Searches read biographies and photos from the caches only and queue what is
+    # missing (enrichment.py). The queue's length limit, and the seconds between
+    # its TheAudioDB calls: TheAudioDB allows the free key 30 a minute, and this
+    # keeps the queue to half of that so page lookups have the rest.
+    ENRICHMENT_QUEUE_LIMIT = 2000
+    ENRICHMENT_TADB_GAP = 4.0
 
     # Redis db if using RedisRateLimiter
     EXTERNAL_LIMIT_REDIS_DB = 10
@@ -517,8 +523,11 @@ class DefaultConfig(six.with_metaclass(ConfigMeta, ConfigBase)):
     # Testing mode
     TESTING = False
 
-    # Hosted cache for third-party images
-    IMAGE_CACHE_HOST = "images.lidarr.audio"
+    # Hosted cache for third-party images. Empty in the estate's fork, so image links point
+    # straight at TheAudioDB and the Cover Art Archive rather than at Lidarr's cache
+    # (images.lidarr.audio upstream). An empty environment value is no override, so a host
+    # can only be set, not cleared, from the environment.
+    IMAGE_CACHE_HOST = ""
 
     # Number of concurrent connections for crawler
     FANART_CONNECTIONS = 1

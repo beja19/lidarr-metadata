@@ -87,6 +87,10 @@ def response_url(url: str) -> str:
     parsed = urlparse(url)
     parsed = parsed._replace(netloc=parsed.netloc.lower())
 
+    if not CONFIG.IMAGE_CACHE_HOST:
+        # No hosted cache: links point straight at TheAudioDB and the Cover Art Archive
+        return parsed.geturl()
+
     if (parsed.netloc.endswith("theaudiodb.com") and parsed.path.startswith("/images/media/")) or parsed.netloc.endswith("coverartarchive.org"):
         old_parsed = parsed
         parsed = urlparse(f"http://{CONFIG.IMAGE_CACHE_HOST.rstrip("/")}/cache/{parsed.geturl()}")
@@ -622,6 +626,9 @@ class TheAudioDbProvider(HttpProvider,
             results = await self.get_by_mbid(mbid)
         except ValueError:
             results = {}
+        except asyncio.CancelledError:
+            # A stopping task: write nothing
+            raise
         except:
             # cached is the artist already taken out of the response, so put it
             # back in the response's shape: cache_results would store None otherwise
@@ -639,6 +646,8 @@ class TheAudioDbProvider(HttpProvider,
             logger.debug("TADB unavailable")
             await util.TADB_CACHE.expire(mbid, CONFIG.CACHE_TTL['provider_error'])
             return
+        except asyncio.CancelledError:
+            raise
         except:
             results = {}
 
@@ -1455,7 +1464,8 @@ class WikipediaProvider(HttpProvider, ArtistOverviewMixin):
         if not ignore_cache:
             cached, expires = await util.WIKI_CACHE.get(url) or (None, True)
 
-            if cached and expires > utcnow():
+            # A stored empty summary is an answer too: the page has no text
+            if cached is not None and expires > utcnow():
                 return cached, expires
         else:
             cached = None

@@ -22,6 +22,7 @@ import lidarrmetadata
 from lidarrmetadata import api
 from lidarrmetadata import chart
 from lidarrmetadata import config
+from lidarrmetadata import enrichment
 from lidarrmetadata import provider
 from lidarrmetadata import util
 
@@ -340,25 +341,14 @@ async def get_album_search_results(query, limit, include_tracks, artist_name):
         search_results = await search_providers[0].search_album_name(query, artist_name=artist_name, limit=limit)
         logger.debug(f"Got album search results in {(timer() - start) * 1000:.0f}ms ")
 
-        async def get_search_result(item):
-            try:
-                result, validity = await api.get_release_group_info(item['Id'])
-                return result, item['Score'], validity
-            except api.ReleaseGroupNotFoundException:
-                return None, -1, provider.utcnow()
-            
-        
-        results = await asyncio.gather(*[get_search_result(item) for item in search_results])
-        albums = [result[0] for result in results if result[0]]
+        # From the mirror and the caches only; what is missing is queued (enrichment.py)
+        albums, scores, validity = await enrichment.search_albums(search_results)
 
         # Current versions of lidarr will fail trying to parse the tracks contained in releases
         # because it's not expecting it to be present and passes null for ArtistMetadata dict
         if not include_tracks:
             for album in albums:
                 album['releases'] = []
-
-        scores = [result[1] for result in results if result[0]]
-        validity = min([result[2] for result in results if result[0]] or [provider.utcnow()])
 
         return albums, scores, validity
         
@@ -415,20 +405,8 @@ async def get_artist_search_results(query, limit):
     # TODO Prefer certain providers?
     artist_ids = await search_providers[0].search_artist_name(query, limit=limit)
 
-    async def get_search_result(id, score):
-        try:
-            result, validity = await api.get_artist_info(id)
-            return result, score, validity
-        except api.ArtistNotFoundException:
-            return None, -1, provider.utcnow()
-
-    results = await asyncio.gather(*[get_search_result(item['Id'], item['Score']) for item in artist_ids])
-
-    artists = [result[0] for result in results if result[0]]
-    scores = [result[1] for result in results if result[0]]
-    validity = min([result[2] for result in results if result[0]] or [provider.utcnow()])
-
-    return artists, scores, validity
+    # From the mirror and the caches only; what is missing is queued (enrichment.py)
+    return await enrichment.search_artists(artist_ids)
 
 @app.route('/search/all', methods=['GET'])
 async def search_all():
@@ -796,6 +774,22 @@ async def handle_spotify_token_renew():
         return jsonify(json)
     except aiohttp.ClientResponseError as error:
         abort(error.status, error.message)
+
+@app.route('/enrichment/status')
+async def enrichment_status():
+    """The background queue's counters (enrichment.py)."""
+    response = jsonify(enrichment.ENRICHER.status())
+    response.cache_control.no_cache = True
+    return response
+
+@app.before_serving
+async def start_enrichment():
+    # Quart sets shutdown_event, then awaits background tasks before after_serving
+    # closes the provider sessions. Nothing here may raise: it would stop the worker.
+    try:
+        app.add_background_task(enrichment.ENRICHER.run, app.shutdown_event)
+    except Exception:
+        logger.exception('Enrichment queue not started')
 
 @app.after_serving
 async def run_async_del():
