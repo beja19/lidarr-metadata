@@ -23,8 +23,15 @@ logger.info('Have api logger')
 
 CONFIG = config.get_config()
 
+# Providers whose first argument is an API key they cannot answer without. With
+# an empty key one is not started, rather than called on every lookup to fail.
+KEYED_PROVIDERS = {'FANARTTVPROVIDER', 'THEAUDIODBPROVIDER'}
+
 # Set up providers
 for provider_name, (args, kwargs) in CONFIG.PROVIDERS.items():
+    if provider_name in KEYED_PROVIDERS and not (args and args[0]):
+        logger.info(f'{provider_name} not started: no API key')
+        continue
     provider_key = list(filter(lambda k: k.upper() == provider_name,
                                provider.PROVIDER_CLASSES.keys()))[0]
     lower_kwargs = {k.lower(): v for k, v in kwargs.items()}
